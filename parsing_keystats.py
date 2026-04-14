@@ -3,6 +3,7 @@ import os
 import time
 import re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import data_string_to_float
 from tqdm import tqdm
 
@@ -125,10 +126,9 @@ def parse_keystats(sp500_df, stock_df):
         flags=re.DOTALL,
     )
 
-    rows = []  # collect all row dicts here; build DataFrame once at the end
-
-    # tqdm is a simple progress bar
-    for stock_directory in tqdm(stock_list, desc="Parsing progress:", unit="tickers"):
+    def process_ticker(stock_directory):
+        """Parse all HTML files for a single ticker and return a list of row dicts."""
+        ticker_rows = []
         keystats_html_files = os.listdir(stock_directory)
 
         # Snippet to get rid of the .DS_Store file in macOS
@@ -194,7 +194,6 @@ def parse_keystats(sp500_df, stock_df):
                 stock_1y_price = float(stock_df.loc[one_year_later, ticker.upper()])
             except KeyError:
                 # If stock data is missing, we must skip this datapoint
-                # print(f"PRICE RETRIEVAL ERROR for {ticker}")
                 continue
 
             stock_p_change = round(
@@ -212,7 +211,17 @@ def parse_keystats(sp500_df, stock_df):
                 sp500_p_change,
             ] + value_list
 
-            rows.append(dict(zip(df_columns, new_df_row)))
+            ticker_rows.append(dict(zip(df_columns, new_df_row)))
+
+        return ticker_rows
+
+    # Parallelise over tickers using 4 threads; sp500_df/stock_df/patterns are read-only
+    rows = []
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(process_ticker, d): d for d in stock_list}
+        for future in tqdm(as_completed(futures), total=len(stock_list),
+                           desc="Parsing progress:", unit="tickers"):
+            rows.extend(future.result())
 
     # Build DataFrame once from all collected rows
     df = pd.DataFrame(rows, columns=df_columns)
