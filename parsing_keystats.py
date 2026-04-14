@@ -110,7 +110,22 @@ def parse_keystats(sp500_df, stock_df):
         "SP500_p_change",
     ] + features
 
-    df = pd.DataFrame(columns=df_columns)
+    # Pre-compile all regex patterns once to avoid recompiling per file
+    compiled_patterns = [
+        re.compile(
+            r">" + re.escape(variable) + r".*?(\-?\d+\.*\d*K?M?B?|N/A[\\n|\s]*|>0|NaN)%?"
+            r"(</td>|</span>)",
+            flags=re.DOTALL,
+        )
+        for variable in features
+    ]
+    avg_vol_pattern = re.compile(
+        re.escape(">Average Volume (3 month)")
+        + r".*?(\-?\d+\.*\d*K?M?B?|N/A[\\n|\s]*|>0)%?(</td>|</span>)",
+        flags=re.DOTALL,
+    )
+
+    rows = []  # collect all row dicts here; build DataFrame once at the end
 
     # tqdm is a simple progress bar
     for stock_directory in tqdm(stock_list, desc="Parsing progress:", unit="tickers"):
@@ -139,37 +154,20 @@ def parse_keystats(sp500_df, stock_df):
                 source = source.replace(",", "")
 
                 # Regex search for the different variables in the html file, then append to value_list
-                for variable in features:
+                for variable, pattern in zip(features, compiled_patterns):
                     # Search for the table entry adjacent to the variable name.
-                    try:
-                        regex = (
-                            r">"
-                            + re.escape(variable)
-                            + r".*?(\-?\d+\.*\d*K?M?B?|N/A[\\n|\s]*|>0|NaN)%?"
-                            r"(</td>|</span>)"
-                        )
-                        value = re.search(regex, source, flags=re.DOTALL).group(1)
-
-                        # Dealing with number formatting
-                        value_list.append(data_string_to_float(value))
-
+                    match = pattern.search(source)
+                    if match:
+                        value_list.append(data_string_to_float(match.group(1)))
                     # The data may not be present. Process accordingly
-                    except AttributeError:
+                    else:
                         # In the past, 'Avg Vol' was instead named 'Average Volume'
                         # If 'Avg Vol' fails, search for 'Average Volume'.
                         if variable == "Avg Vol (3 month)":
-                            try:
-                                new_variable = ">Average Volume (3 month)"
-                                regex = (
-                                    re.escape(new_variable)
-                                    + r".*?(\-?\d+\.*\d*K?M?B?|N/A[\\n|\s]*|>0)%?"
-                                    r"(</td>|</span>)"
-                                )
-                                value = re.search(regex, source, flags=re.DOTALL).group(
-                                    1
-                                )
-                                value_list.append(data_string_to_float(value))
-                            except AttributeError:
+                            avg_match = avg_vol_pattern.search(source)
+                            if avg_match:
+                                value_list.append(data_string_to_float(avg_match.group(1)))
+                            else:
                                 value_list.append("N/A")
                         else:
                             value_list.append("N/A")
@@ -214,8 +212,10 @@ def parse_keystats(sp500_df, stock_df):
                 sp500_p_change,
             ] + value_list
 
-            df = df.append(dict(zip(df_columns, new_df_row)), ignore_index=True)
+            rows.append(dict(zip(df_columns, new_df_row)))
 
+    # Build DataFrame once from all collected rows
+    df = pd.DataFrame(rows, columns=df_columns)
     # Remove rows with missing stock price data
     df.dropna(axis=0, subset=["Price", "stock_p_change"], inplace=True)
     # Output the CSV

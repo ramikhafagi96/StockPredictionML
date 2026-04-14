@@ -42,6 +42,10 @@ def predict_stocks():
     X_test = data[features].values
     z = data["Ticker"].values
 
+    if X_test.shape[0] == 0:
+        print("No valid samples in forward_sample.csv. Run current_data.py first.")
+        return
+
     # Get the predicted tickers
     y_pred = clf.predict(X_test)
     if sum(y_pred) == 0:
