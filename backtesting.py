@@ -33,6 +33,7 @@ def backtest():
     # z is required for us to track returns
     z = np.array(data_df[["stock_p_change", "SP500_p_change"]])
 
+    # Generate the train set and test set by randomly splitting the dataset
     X_train, X_test, y_train, y_test, z_train, z_test = train_test_split(
         X, y, z, test_size=0.2
     )
