@@ -3,3 +3,9 @@
 /__pycache__
 /intraQuarter
 .DS_Store
+/.venv/
+.pytest_cache/
+__pycache__/
+/forecast.csv
+/stock_ranking.csv
+/backtest.csv
