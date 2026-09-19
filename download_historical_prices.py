@@ -1,81 +1,87 @@
-import os
+"""Download sorted adjusted closes without hiding missing or stale observations."""
+
+import argparse
+from pathlib import Path
+
 import pandas as pd
 import yfinance as yf
+
+from stock_prediction import DEFAULT_TICKERS
 
 START_DATE = "2003-08-01"
 END_DATE = "2015-01-01"
 
 
-def build_stock_dataset(start=START_DATE, end=END_DATE):
-    """
-    Creates the dataset containing all stock prices
-    :returns: stock_prices.csv
-    """
-
-    statspath = "intraQuarter/_KeyStats/"
-    ticker_list = os.listdir(statspath)
-
-    # Required on macOS
-    if ".DS_Store" in ticker_list:
-        os.remove(f"{statspath}/.DS_Store")
-        ticker_list.remove(".DS_Store")
-
-    if not ticker_list:
-        print("No tickers found in _KeyStats. Skipping stock dataset build.")
-        return
-
-    # Get all Adjusted Close prices for all the tickers in our list,
-    # between START_DATE and END_DATE
-    all_data = yf.download(ticker_list, start, end)
-    stock_data = all_data["Close"].dropna(how="all", axis=1).ffill()
-
-    missing_tickers = [
-        ticker for ticker in ticker_list if ticker.upper() not in stock_data.columns
-    ]
-    print(f"{len(missing_tickers)} tickers are missing: \n {missing_tickers} ")
-    stock_data.to_csv("stock_prices.csv", index_label="Date")
+def _tickers(tickers):
+    if tickers is not None:
+        values = list(tickers)
+    else:
+        path = Path("intraQuarter/_KeyStats")
+        values = [p.name for p in path.iterdir() if not p.name.startswith(".")] if path.exists() else list(DEFAULT_TICKERS)
+    values = sorted(set(t.upper() for t in values))
+    if not values:
+        raise ValueError("No tickers supplied")
+    return values
 
 
-def build_sp500_dataset(start=START_DATE, end=END_DATE):
-    """
-    Creates the dataset containing S&P500 prices
-    :returns: sp500_index.csv
-    """
-    index_data = yf.download("SPY", start=START_DATE, end=END_DATE)
-    index_data["Close"].squeeze().rename("Adj Close").to_frame().to_csv("sp500_index.csv", index_label="Date")
+def _close_frame(data, tickers):
+    if data.empty:
+        raise ValueError("Download returned no data")
+    close = data["Close"]
+    if isinstance(close, pd.Series):
+        close = close.to_frame(name=tickers[0])
+    close = close.sort_index()
+    if close.index.has_duplicates:
+        raise ValueError("Download contains duplicate dates")
+    return close
 
 
-def build_dataset_iteratively(
-    idx_start, idx_end, date_start=START_DATE, date_end=END_DATE
-):
-    """
-    This is an alternative iterative solution to building the stock dataset, which may be necessary if the
-    tickerlist is too big.
-    Instead of downloading all at once, we download ticker by ticker and append to a dataframe.
-    This will download data for tickerlist[idx_start:idx_end], which makes this method suitable
-    for chunking data.
+def build_stock_dataset(start=START_DATE, end=END_DATE, tickers=None,
+                        output="stock_prices.csv"):
+    tickers = _tickers(tickers)
+    data = yf.download(tickers, start=start, end=end, auto_adjust=True)
+    close = _close_frame(data, tickers).dropna(how="all", axis=1)
+    missing = sorted(set(tickers) - set(close.columns))
+    if missing:
+        raise ValueError(f"No prices returned for: {', '.join(missing)}")
+    # No global forward/back fill: the forecasting window owns missing-data policy.
+    close.to_csv(output, index_label="Date")
+    return close
 
-    :param idx_start: (int) the starting index of the tickerlist
-    :param idx_end: (int) the end index of the tickerlist
-    """
 
-    statspath = "intraQuarter/_KeyStats/"
-    ticker_list = os.listdir(statspath)
+def build_sp500_dataset(start=START_DATE, end=END_DATE, output="sp500_index.csv"):
+    data = yf.download("SPY", start=start, end=end, auto_adjust=True)
+    close = _close_frame(data, ["SPY"])
+    result = close.iloc[:, 0].rename("Adj Close").to_frame()
+    volume = data["Volume"]
+    if isinstance(volume, pd.DataFrame):
+        volume = volume.iloc[:, 0]
+    result["Volume"] = volume.reindex(result.index)
+    result.to_csv(output, index_label="Date")
+    return result
 
-    df = pd.DataFrame()
 
-    for ticker in ticker_list:
-        ticker = ticker.upper()
-
-        stock_ohlc = yf.download(ticker, start=date_start, end=date_end)
-        if stock_ohlc.empty:
-            print(f"No data for {ticker}")
-            continue
-        adj_close = stock_ohlc["Close"].rename(ticker)
-        df = pd.concat([df, adj_close], axis=1)
-    df.to_csv("stock_prices.csv")
+def build_dataset_iteratively(idx_start, idx_end, date_start=START_DATE,
+                              date_end=END_DATE, tickers=None, output="stock_prices.csv"):
+    selected = _tickers(tickers)[idx_start:idx_end]
+    if not selected:
+        raise ValueError("Ticker slice is empty")
+    frames = []
+    for ticker in selected:
+        data = yf.download(ticker, start=date_start, end=date_end, auto_adjust=True)
+        frames.append(_close_frame(data, [ticker]))
+    result = pd.concat(frames, axis=1).sort_index()
+    result.to_csv(output, index_label="Date")
+    return result
 
 
 if __name__ == "__main__":
-    build_stock_dataset()
-    build_sp500_dataset()
+    parser = argparse.ArgumentParser(description="Download adjusted stock prices and SPY benchmark")
+    parser.add_argument("--start", default=START_DATE)
+    parser.add_argument("--end", default=END_DATE, help="Exclusive end date")
+    parser.add_argument("--tickers", nargs="+", default=list(DEFAULT_TICKERS))
+    parser.add_argument("--prices-output", default="stock_prices.csv")
+    parser.add_argument("--benchmark-output", default="sp500_index.csv")
+    args = parser.parse_args()
+    build_stock_dataset(args.start, args.end, args.tickers, args.prices_output)
+    build_sp500_dataset(args.start, args.end, args.benchmark_output)
