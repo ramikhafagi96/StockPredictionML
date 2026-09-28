@@ -63,7 +63,7 @@ def status_calc(stock, sp500, outperformance=10):
     """A simple function to classify whether a stock outperformed the S&P500
     :param stock: stock price
     :param sp500: S&P500 price
-    :param outperformance: stock is classified 1 if stock price > S&P500 price + outperformance
+    :param outperformance: threshold
     :return: true/false
     """
     if outperformance < 0:
